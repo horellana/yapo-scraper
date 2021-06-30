@@ -1,0 +1,19 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+selenium = "*"
+pendulum = "*"
+pypika = "*"
+psycopg2 = "*"
+requests = "*"
+
+[dev-packages]
+jedi-language-server = "*"
+pylint = "*"
+jedi = "*"
+
+[requires]
+python_version = "3.7"
