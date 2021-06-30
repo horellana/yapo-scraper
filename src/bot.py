@@ -9,18 +9,45 @@ from pypika import Table
 from pypika import PostgreSQLQuery as Query, Order
 
 
-Messages = Table("telegram_messages")
+Chats = Table("telegram_chats")
+Messages = Table("telegram_commands")
+SearchTerms = Table("search_terms")
+ChatSearchTerms = Table("telegram_chat_search_terms")
 
 URL = f"https://api.telegram.org/bot{config.telegram_bot_token}/getUpdates"
+
+
+def send_telegram_notification(msg):
+    url = f" https://api.telegram.org/bot{config.telegram_bot_token}/sendMessage"
+    url_params = {
+            "chat_id": config.telegram_chat_id,
+            "text": msg,
+    }
+
+    return requests.post(url, url_params)
+
+
+def connect_to_db():
+    db_name = config.db_name
+    db_user = config.db_user
+    db_password = config.db_password
+
+    db_connection = psycopg2.connect(f"dbname={db_name} user={db_user} password={db_password}")
+
+    return db_connection
 
 
 def get_last_processed_message(db):
     query = Query.from_(Messages).select(Messages.date).orderby(Messages.date, order=Order.desc).limit(1)
     query = str(query)
     print(query)
+    
+    db.execute(query)
+    return db.fetchone()[0]
 
 
 def get_commands():
+    print(f"GET {URL}")
     response = requests.get(URL)
     response_json = response.json()
 
@@ -38,6 +65,7 @@ def parse_command(command):
     (command_name, *command_arg) = command_text.split(" ")
 
     result = {
+        "id": command["message"]["message_id"],
         "date": pendulum.from_timestamp(command["message"]["date"]).isoformat(),
         "chat_id": command["message"]["chat"]["id"],
         "command_action": command_name,
@@ -47,30 +75,107 @@ def parse_command(command):
     return result
 
 
+def insert_telegram_chat(db, chat_id):
+    query = Query.into(Chats).columns("id").insert(chat_id).on_conflict("id").do_nothing()
+    query = str(query)
+
+    print(query)
+    db.execute(query)
+
+
+def insert_telegram_action(db, action_id, chat_id, action_name, action_args):
+    query = Query \
+            .into(Commands) \
+            .columns("id", "telegram_chat_id", "command", "parameters") \
+            .insert(action_id, chat_id, action_name, action_args) \
+            .on_conflict("id") \
+            .do_nothing()
+
+    query = str(query)
+    print(query)
+    db.execute(query)
+
+
+def create_search_term(db, chat_id, search_term_name):
+    query = Query \
+                .into(SearchTerms) \
+                .columns("name") \
+                .insert(search_term_name) \
+                .on_conflict(SearchTerms.name) \
+                .do_update(SearchTerms.name, search_term_name) \
+                .returning(SearchTerms.id)
+
+    query = str(query)
+    print(query)
+
+    db.execute(query)
+    search_term_id = db.fetchone()[0]
+
+    query = Query.into(ChatSearchTerms) \
+            .columns("telegram_chat_id", "search_term_id") \
+            .insert(chat_id, search_term_id) \
+            .on_conflict("telegram_chat_id", "search_term_id") \
+            .do_nothing()
+
+    query = str(query)
+    print(query)
+
+    db.execute(query)
+
+
+def handle_command(db, command):
+    action = command["command_action"]
+    args = command["command_arg"]
+
+    print(f"action: {action}")
+    print(f"args: {args}")
+
+    if action == "/add_search":
+        query = Query \
+                .into("telegram_commands") \
+                .columns("id", "telegram_chat_id", "date", "command", "args") \
+                .insert(command["id"], command["chat_id"], command["date"], action, args) \
+                .on_conflict("date").do_nothing()
+
+        query = str(query)
+        print(query)
+        db.execute(query)
+
+        create_search_term(db, command["chat_id"], args)
+
+        send_telegram_notification(f"Search '{args}' added")
+
+
 def main():
-    for command in get_commands():
-        print(json.dumps(command, indent=1))
-        parsed = parse_command(command)
-        print(parsed)
+    try:
+        db = connect_to_db()
+        db_cursor = db.cursor()
 
-    # print(json.dumps(list(get_commands()), indent=1))
-    # print("main()")
-    # db_connection = None
+        newest_command_date = pendulum.parse(get_last_processed_message(db_cursor).isoformat()).int_timestamp
 
-    # try:
-    #     connection_string = f"dbname={config.db_name} host={config.db_host} userw={config.db_user} password={config.db_password}"
+        print(newest_command_date)
 
-    #     if hasattr(config, "db_port"):
-    #         connection_string = f"{connection_string} port={config.db_port}"
+        for command in get_commands():
+            parsed = parse_command(command)
+            
+            print(parsed)
+            
+            print(newest_command_date)
+            print(pendulum.parse(parsed["date"]).int_timestamp)
 
-    #     print(f"Db connection string: {connection_string}")
+            if newest_command_date is not None:
+                if pendulum.parse(parsed["date"]).int_timestamp <= newest_command_date:
+                    print("Ignoring old command")
+                    continue
 
-    #     db_connection = psycopg2.connect(connection_string)
-    #     latest_message = get_last_processed_message(db_connection.cursor())
-    # finally:
-    #     if db_connection is not None:
-    #         db_connection.commit()
-    #         db_connection.close()
+            insert_telegram_chat(db_cursor, parsed["chat_id"])
+            handle_command(db_cursor, parsed)
+
+    finally:
+        if db is not None:
+            db.commit()
+            db.close()
+         
 
 if __name__ == "__main__":
     main()
