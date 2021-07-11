@@ -1,0 +1,9 @@
+[Unit]
+Description=Run yapo scraper each 10 min
+
+[Timer]
+OnUnitActiveSec=5
+OnBootSec=5s
+
+[Install]
+WantedBy=timers.target

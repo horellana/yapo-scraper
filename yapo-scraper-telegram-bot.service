@@ -1,0 +1,10 @@
+[Unit]
+Description=Yapo's scraper telegram bot service
+
+[Service]
+WorkingDirectory=/opt/yapo-scraper
+Environment=PYTHONPATH=.
+ExecStart=pipenv run python src/bot.py
+KillMode=process
+RestartPreventExitStatus=255
+Type=simple

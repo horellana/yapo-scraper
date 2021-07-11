@@ -1,0 +1,10 @@
+[Unit]
+Description=Yapo's scraper service
+
+[Service]
+WorkingDirectory=/opt/yapo-scraper
+Environment=PYTHONPATH=.
+ExecStart=pipenv run python src/main.py
+KillMode=process
+RestartPreventExitStatus=255
+Type=simple
