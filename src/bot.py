@@ -123,6 +123,21 @@ def create_search_term(db, chat_id, search_term_name):
     db.execute(query)
 
 
+def insert_command(db, command):
+    action = command["command_action"]
+    args = command["command_arg"]
+
+    query = Query \
+            .into("telegram_commands") \
+            .columns("id", "telegram_chat_id", "date", "command", "args") \
+            .insert(command["id"], command["chat_id"], command["date"], action, args) \
+            .on_conflict("date").do_nothing()
+
+    query = str(query)
+    print(query)
+    db.execute(query)
+
+
 def handle_command(db, command):
     action = command["command_action"]
     args = command["command_arg"]
@@ -131,31 +146,55 @@ def handle_command(db, command):
     print(f"args: {args}")
 
     if action == "/add_search":
+        create_search_term(db, command["chat_id"], args)
+        insert_command(db, command)
+        send_telegram_notification(f"Search '{args}' added")
+
+    elif action == "/list_searchs":
         query = Query \
-                .into("telegram_commands") \
-                .columns("id", "telegram_chat_id", "date", "command", "args") \
-                .insert(command["id"], command["chat_id"], command["date"], action, args) \
-                .on_conflict("date").do_nothing()
+                .from_(SearchTerms) \
+                .left_join(ChatSearchTerms) \
+                .on(ChatSearchTerms.search_term_id == SearchTerms.id) \
+                .select(SearchTerms.name) \
+                .where(ChatSearchTerms.telegram_chat_id == command["chat_id"])
 
         query = str(query)
         print(query)
+
+        db.execute(query)
+        searchs = db.fetchall()
+        
+        insert_command(db, command)
+        send_telegram_notification("\n".join(str(s[0]) for s in searchs))
+
+    elif action == "/delete_search":
+        query = Query \
+                .from_(ChatSearchTerms) \
+                .left_join(SearchTerms) \
+                .on(ChatSearchTerms.search_term_id == SearchTerms.id) \
+                .where(SearchTerms.name == args) \
+                .where(ChatSearchTerms.telegram_chat_id == command["chat_id"]) \
+                .delete()
+
+        query = str(query)
+        print(query)
+
         db.execute(query)
 
-        create_search_term(db, command["chat_id"], args)
-
-        send_telegram_notification(f"Search '{args}' added")
+        send_telegram_notificatin(f"Search {args} deleted")
 
 
 def main():
     try:
         db = connect_to_db()
-        db_cursor = db.cursor()
+        
 
-        newest_command_date = pendulum.parse(get_last_processed_message(db_cursor).isoformat()).int_timestamp
+        newest_command_date = pendulum.parse(get_last_processed_message(db.cursor()).isoformat()).int_timestamp
 
         print(newest_command_date)
 
         for command in get_commands():
+            db_cursor = db.cursor()
             parsed = parse_command(command)
             
             print(parsed)
@@ -169,7 +208,14 @@ def main():
                     continue
 
             insert_telegram_chat(db_cursor, parsed["chat_id"])
-            handle_command(db_cursor, parsed)
+
+            try:
+                handle_command(db_cursor, parsed)
+                db.commit()
+            except Exception as e:
+                print(f"Error when handling command: {parsed}: {e}")
+                db.rollback()
+                continue
 
     finally:
         if db is not None:
