@@ -22,7 +22,7 @@ def chunks(lst, n):
 
 def send_telegram_notification(new_sales):
     for items in chunks(new_sales, 5):
-        url = f" https://api.telegram.org/bot{config.telegram_bot_token}/sendMessage"
+        url = f"https://api.telegram.org/bot{config.telegram_bot_token}/sendMessage"
         text = "\n".join(f"{sale['title']} {sale['price']} {sale['url']}" for sale in items)
 
         url_params = {
